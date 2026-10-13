@@ -1,9 +1,9 @@
 from lrfhss.lrfhss_core import Base
 
 class BaseACRDA(Base):
-    def __init__(self, obw, window_size, window_step, time_on_air, threshold):
+    def __init__(self, obw, window_size, window_step, time_on_air, threshold, channel=None):
 
-        super().__init__(obw, threshold)
+        super().__init__(obw, threshold, channel)
         self.memory = {}
         self.window_size = window_size*time_on_air
         self.window_step = window_step*time_on_air
@@ -17,8 +17,8 @@ class BaseACRDA(Base):
                 packet.fragments.remove(f)
             else:
                 break
-        h_success = sum( ((len(f.collided)==0) and f.transmitted==1) if (f.type=='header') else 0 for f in packet.fragments)
-        p_success = sum( ((len(f.collided)==0) and f.transmitted==1) if (f.type=='payload') else 0 for f in packet.fragments)
+        h_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='header') else 0 for f in packet.fragments)
+        p_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='payload') else 0 for f in packet.fragments)
         success = 1 if ((h_success>0) and (p_success >= self.threshold)) else 0
         if success == 1:
             self.packets_received[packet.node_id] += 1

@@ -5,8 +5,9 @@ import inspect
 
 
 class Settings():
-    def __init__(self, number_nodes=80000//8, simulation_time=60*60, payload_size = 10, headers = 3, header_duration = 0.233472, payloads = None, threshold = None, payload_duration = 0.1024,
-                 code = '1/3', traffic_class = Exponential_Traffic, traffic_param = {'average_interval': 900}, transceiver_wait = 0.006472, obw = 35, base='core', window_size = 2, window_step = 0.5):
+    def __init__(self, number_nodes=80000//8, simulation_time=60*60, payload_size=10, headers=3, header_duration=0.233472, payloads=None, threshold=None, payload_duration=0.1024,
+                 code='1/3', traffic_class=Exponential_Traffic, traffic_param=None, transceiver_wait=0.006472, obw=35, base='core', window_size=2, window_step=0.5,
+                 satellite=None, tx_power_dbm=14.0):
         
         self.number_nodes = number_nodes
         self.simulation_time = simulation_time
@@ -19,6 +20,10 @@ class Settings():
         self.base = base
         self.window_size = window_size
         self.window_step = window_step
+        self.traffic_class = traffic_class
+        self.traffic_param = dict(traffic_param or {'average_interval': 900})
+        self.satellite = satellite
+        self.tx_power_dbm = tx_power_dbm
 
         if payloads:
             self.payloads = payloads
@@ -59,4 +64,4 @@ class Settings():
             warnings.warn(f'Using an invalid traffic class.')
             exit(1)
 
-        self.traffic_generator = traffic_class(traffic_param);
+        self.traffic_generator = traffic_class(dict(self.traffic_param))

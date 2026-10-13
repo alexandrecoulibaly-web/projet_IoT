@@ -28,3 +28,37 @@ The project contains three main files. lrfhss_core.py contains the the main clas
 Two other files provide simulator extensions. The file traffic.py implements different types of traffic generators to be used by Node objects. Finally, acrda.py implements a new version of the Base (base station) class to implement the ACRDA receiver/decoder.
 
 Plots were made with the [SciencePlots](https://github.com/garrettj403/SciencePlots) library.
+
+## NTN-6G satellite IoT extension
+
+The original terrestrial/base-station simulator remains the default.  The
+opt-in `lrfhss.satellite.SatelliteChannel` adds an analytical LEO link budget:
+altitude/elevation-dependent slant range, free-space path loss, received power,
+thermal noise, SNR thresholding, access fraction, optional smooth satellite
+movement, and Doppler estimation.  A fragment is only decodable when it is
+both collision-free and within the link budget.
+
+Run the reproducible experiment matrix (the default is laptop-sized but can be
+reduced with `--replications` and `--simulation-time`):
+
+```powershell
+python -m lrfhss.ntn_experiments --output results --replications 3 --simulation-time 600
+```
+
+This writes `ntn_results.csv` and four PNG figures.  Every replication uses a
+deterministic seed derived from `20261012`.  For a single run, construct
+`Settings(..., satellite=SatelliteChannel(SatelliteConfig(...)))` and call
+`run_sim(settings, seed=..., return_metrics=True)`.  The returned dictionary
+contains PDR/PSR, collision and outage rates, throughput, mean latency,
+successful/transmitted packet counts, and estimated access fraction.
+
+Validate the extension with:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+The model assumes free-space propagation, a single isotropic ground device,
+fixed receiver noise bandwidth, and a smooth synthetic pass rather than a
+TLE/SGP4 orbit.  It does not model antenna patterns, atmospheric attenuation,
+handover, link adaptation, or physical-layer LR-FHSS waveform decoding.

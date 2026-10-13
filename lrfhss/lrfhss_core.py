@@ -14,6 +14,7 @@ class Fragment():
         self.timestamp = 0
         self.id = id(self)
         self.collided = []
+        self.link_success = True
 
 class Packet():
     def __init__(self, node_id, obw, headers, payloads, header_duration, payload_duration):
@@ -23,6 +24,8 @@ class Packet():
         self.success = 0
         self.channels = random.choices(range(obw), k=headers+payloads)
         self.fragments = []
+        self.transmission_start = None
+        self.decode_time = None
         for h in range(headers):
             self.fragments.append(Fragment('header',header_duration, self.channels[h], self.id))
         for p in range(payloads):
@@ -75,6 +78,7 @@ class Node():
             #time between transmissions
             yield env.timeout(self.next_transmission())
             self.transmitted += 1
+            self.packet.transmission_start = env.now
             bs.add_packet(self.packet)
             next_fragment = self.packet.next()
             first_payload = 0
@@ -102,13 +106,18 @@ class Node():
             self.end_of_transmission()
 
 class Base():
-    def __init__(self, obw, threshold):
+    def __init__(self, obw, threshold, channel=None):
         self.id = id(self)
         self.transmitting = {}
-        for channel in range(obw):
-            self.transmitting[channel] = []
+        for channel_id in range(obw):
+            self.transmitting[channel_id] = []
         self.packets_received = {}
         self.threshold = threshold
+        self.channel = channel
+        self.fragments_total = 0
+        self.fragments_collided = 0
+        self.fragments_outage = 0
+        self.latencies = []
 
     def add_packet(self, packet):
         pass
@@ -117,12 +126,19 @@ class Base():
         self.packets_received[id] = 0
 
     def receive_packet(self, fragment):
+        self.fragments_total += 1
+        if self.channel is not None:
+            fragment.link_success = self.channel.fragment_available(fragment.timestamp)
+            if not fragment.link_success:
+                self.fragments_outage += 1
         self.transmitting[fragment.channel].append(fragment)
 
     def finish_fragment(self, fragment):
         self.transmitting[fragment.channel].remove(fragment)
-        if len(fragment.collided) == 0:
+        if len(fragment.collided) == 0 and fragment.link_success:
             fragment.success = 1
+        if fragment.collided:
+            self.fragments_collided += 1
         fragment.transmitted = 1
 
     def check_collision(self,fragment):
@@ -131,12 +147,15 @@ class Base():
             fragment.collided.append(f)
 
     def try_decode(self,packet,now):
-        h_success = sum( ((len(f.collided)==0) and f.transmitted==1) if (f.type=='header') else 0 for f in packet.fragments)
-        p_success = sum( ((len(f.collided)==0) and f.transmitted==1) if (f.type=='payload') else 0 for f in packet.fragments)
+        h_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='header') else 0 for f in packet.fragments)
+        p_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='payload') else 0 for f in packet.fragments)
         success = 1 if ((h_success>0) and (p_success >= self.threshold)) else 0
         if success == 1:
             self.packets_received[packet.node_id] += 1
             packet.success = 1
+            packet.decode_time = now
+            if packet.transmission_start is not None:
+                self.latencies.append(now - packet.transmission_start)
             return True
         else:
             return False
