@@ -2,12 +2,14 @@ import numpy as np
 import warnings
 from lrfhss.traffic import *
 import inspect
+from dataclasses import replace
+from lrfhss.satellite import SatelliteChannel
 
 
 class Settings():
     def __init__(self, number_nodes=80000//8, simulation_time=60*60, payload_size=10, headers=3, header_duration=0.233472, payloads=None, threshold=None, payload_duration=0.1024,
                  code='1/3', traffic_class=Exponential_Traffic, traffic_param=None, transceiver_wait=0.006472, obw=35, base='core', window_size=2, window_step=0.5,
-                 satellite=None, tx_power_dbm=14.0):
+                 satellite=None, tx_power_dbm=None):
         
         self.number_nodes = number_nodes
         self.simulation_time = simulation_time
@@ -22,8 +24,10 @@ class Settings():
         self.window_step = window_step
         self.traffic_class = traffic_class
         self.traffic_param = dict(traffic_param or {'average_interval': 900})
-        self.satellite = satellite
-        self.tx_power_dbm = tx_power_dbm
+        self.satellite = (SatelliteChannel(replace(satellite.config, tx_power_dbm=tx_power_dbm),
+                                          seed=satellite.seed)
+                          if satellite is not None and tx_power_dbm is not None else satellite)
+        self.tx_power_dbm = (self.satellite.config.tx_power_dbm if self.satellite else tx_power_dbm)
 
         if payloads:
             self.payloads = payloads

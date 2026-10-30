@@ -28,6 +28,7 @@ class Uniform_Traffic(Traffic):
 class Constant_Traffic(Traffic):
     def __init__(self, traffic_param):
         super().__init__(traffic_param)
+        self.first_transmission = True
         if not 'constant_interval' in self.traffic_param:
             warnings.warn(f'traffic_param constant_interval key missing for Constant_Traffic. Using with constant_interval=900 as default')
             self.traffic_param['constant_interval'] = 900
@@ -38,7 +39,8 @@ class Constant_Traffic(Traffic):
 
     def traffic_function(self):
         # First transmissions is random, devices are not initiated at the same time
-        if self.transmitted == 0:
+        if self.first_transmission:
+            self.first_transmission = False
             return random.uniform(0,2*self.traffic_param['constant_interval'])
         else:
             return max(0, self.traffic_param['constant_interval'] + random.gauss(0,self.traffic_param['standard_deviation']))

@@ -12,18 +12,20 @@ class BaseACRDA(Base):
         self.memory[packet.id] = packet
 
     def try_decode(self,packet,now):
-        for f in list(packet.fragments):
-            if not self.in_window(f, now):
-                packet.fragments.remove(f)
-            else:
-                break
-        h_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='header') else 0 for f in packet.fragments)
-        p_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='payload') else 0 for f in packet.fragments)
+        if packet.success:
+            return False
+        # Never mutate the transmitter's fragment list: Packet.next indexes it.
+        fragments = [f for f in packet.fragments if self.in_window(f, now)]
+        h_success = sum(f.type == 'header' and not f.collided and f.transmitted and f.link_success for f in fragments)
+        p_success = sum(f.type == 'payload' and not f.collided and f.transmitted and f.link_success for f in fragments)
         success = 1 if ((h_success>0) and (p_success >= self.threshold)) else 0
         if success == 1:
             self.packets_received[packet.node_id] += 1
             packet.success = 1
-            for f in packet.fragments:
+            packet.decode_time = now
+            if packet.transmission_start is not None:
+                self.latencies.append(now - packet.transmission_start)
+            for f in fragments:
                 f.success = 1
                 for c in list(f.collided):
                     f.collided.remove(c)
@@ -37,12 +39,8 @@ class BaseACRDA(Base):
         while(1):
             #FIRST: Remove fragments from memory that are outside the window.
             for p in list(self.memory):
-                for f in list(self.memory[p].fragments):
-                    if not self.in_window(f, env.now):
-                        self.memory[p].fragments.remove(f)
-                    else:
-                        break
-                if len(self.memory[p].fragments) == 0:
+                if all(f.transmitted and not self.in_window(f, env.now)
+                       for f in self.memory[p].fragments):
                     del(self.memory[p])
             
             #SECOND: Apply interference cancellation

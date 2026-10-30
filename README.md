@@ -29,28 +29,32 @@ Two other files provide simulator extensions. The file traffic.py implements dif
 
 Plots were made with the [SciencePlots](https://github.com/garrettj403/SciencePlots) library.
 
-## NTN-6G satellite IoT extension
+## Simplified satellite IoT uplink extension
 
 The original terrestrial/base-station simulator remains the default.  The
 opt-in `lrfhss.satellite.SatelliteChannel` adds an analytical LEO link budget:
 altitude/elevation-dependent slant range, free-space path loss, received power,
-thermal noise, SNR thresholding, access fraction, optional smooth satellite
-movement, and Doppler estimation.  A fragment is only decodable when it is
+thermal noise, SNR thresholding, access fraction, circular overhead satellite
+movement, and signed Doppler estimation. A fragment is only decodable when it is
 both collision-free and within the link budget.
 
 Run the reproducible experiment matrix (the default is laptop-sized but can be
 reduced with `--replications` and `--simulation-time`):
 
 ```powershell
-python -m lrfhss.ntn_experiments --output results --replications 3 --simulation-time 600
+python -m lrfhss.ntn_experiments --output results_reviewed --replications 3 --simulation-time 600
 ```
 
-This writes `ntn_results.csv` and four PNG figures.  Every replication uses a
+This writes `ntn_results.csv`, `summary.csv`, `manifest.json` and four PNG figures.
+The default profiles are 1/3 with three headers and 2/3 with two headers.
+Every replication uses a
 deterministic seed derived from `20261012`.  For a single run, construct
 `Settings(..., satellite=SatelliteChannel(SatelliteConfig(...)))` and call
 `run_sim(settings, seed=..., return_metrics=True)`.  The returned dictionary
 contains PDR/PSR, collision and outage rates, throughput, mean latency,
-successful/transmitted packet counts, and estimated access fraction.
+successful/transmitted packet counts, unfinished transmissions, and both orbit
+and observation-window access fractions. PDR is `None` when no packet starts;
+latency is `None` when none succeeds. CSV exports these as empty cells.
 
 Validate the extension with:
 
@@ -58,7 +62,21 @@ Validate the extension with:
 python -m unittest discover -s tests -v
 ```
 
-The model assumes free-space propagation, a single isotropic ground device,
-fixed receiver noise bandwidth, and a smooth synthetic pass rather than a
-TLE/SGP4 orbit.  It does not model antenna patterns, atmospheric attenuation,
-handover, link adaptation, or physical-layer LR-FHSS waveform decoding.
+The model assumes free-space propagation, colocated ground terminals, a
+nonrotating spherical Earth and a circular overhead orbit. The initial elevation
+is on the approaching side; the default orbital period follows Kepler's law.
+Set `orbit_period_s=0` for static geometry. Doppler is diagnostic only, and
+propagation delay is absent from event timing. Antenna patterns, handover,
+link adaptation and waveform decoding are not modeled.
+
+The default 125 kHz equivalent noise bandwidth and -15 dB SNR threshold imply
+an **illustrative, uncalibrated -133.03 dBm sensitivity** with 5 dB noise figure.
+Do not interpret that bandwidth as LR-FHSS's instantaneous modulation bandwidth
+or use the output as a validated satellite link prediction.
+
+Read [Report.md](Report.md) for the code audit, corrected results and remaining
+model limitations. [Report_legacy.md](Report_legacy.md), `results_small` and
+`results_quick` preserve the historical analysis, which used an incorrect
+always-visible moving-satellite model. Do not overwrite those folders when
+running corrected experiments. `python examples/audit_results.py` independently
+prints the historical and corrected aggregate statistics.

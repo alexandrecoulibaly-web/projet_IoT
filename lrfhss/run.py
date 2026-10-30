@@ -4,8 +4,12 @@ from lrfhss.settings import Settings
 import simpy
 
 def run_sim(settings: Settings, seed=0, return_metrics=False):
+    if settings.simulation_time <= 0:
+        raise ValueError("simulation_time must be positive")
     random.seed(seed)
     np.random.seed(seed)
+    if settings.satellite:
+        settings.satellite.random.seed(settings.satellite.seed)
     env = simpy.Environment()
     if settings.base=='acrda':
         bs = BaseACRDA(settings.obw, settings.window_size, settings.window_step, settings.time_on_air, settings.threshold, settings.satellite)
@@ -27,23 +31,25 @@ def run_sim(settings: Settings, seed=0, return_metrics=False):
     success = sum(bs.packets_received.values())
     transmitted = sum(n.transmitted for n in nodes)
 
-    if transmitted == 0:
-        return 1 if not return_metrics else {
-            "pdr": 1.0, "psr": 1.0, "collision_rate": 0.0, "throughput_bps": 0.0,
-            "latency_s": 0.0, "outage_rate": 0.0, "access_fraction": 0.0,
-            "successful_packets": 0, "transmitted_packets": 0,
-        }
+    # Metrics describe the finite observation window; unfinished packets are exposed.
+    pdr = success / transmitted if transmitted else None
     metrics = {
-        "pdr": success / transmitted,
-        "psr": success / transmitted,
+        "pdr": pdr,
+        "psr": pdr,
         "collision_rate": bs.fragments_collided / max(bs.fragments_total, 1),
         "throughput_bps": success * settings.payload_size * 8 / settings.simulation_time,
-        "latency_s": float(np.mean(bs.latencies)) if bs.latencies else 0.0,
+        "latency_s": float(np.mean(bs.latencies)) if bs.latencies else None,
         "outage_rate": bs.fragments_outage / max(bs.fragments_total, 1),
         "access_fraction": settings.satellite.access_fraction() if settings.satellite else 1.0,
+        "window_access_fraction": settings.satellite.access_fraction(duration_s=settings.simulation_time) if settings.satellite else 1.0,
+        "unfinished_packets": sum(n.packet.transmission_start is not None and
+                                  not all(f.transmitted for f in n.packet.fragments) for n in nodes),
+        "fragments_started": bs.fragments_total,
         "successful_packets": success,
         "transmitted_packets": transmitted,
     }
+    if not return_metrics and transmitted == 0:
+        return 1  # Preserve the historical scalar API only.
     return metrics if return_metrics else [[metrics["pdr"]], [success * settings.payload_size], [transmitted]]
 
     #Get the average success per device, used to plot the CDF 

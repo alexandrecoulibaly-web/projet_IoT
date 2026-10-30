@@ -14,6 +14,7 @@ class Fragment():
         self.timestamp = 0
         self.id = id(self)
         self.collided = []
+        self.ever_collided = False
         self.link_success = True
 
 class Packet():
@@ -29,7 +30,7 @@ class Packet():
         for h in range(headers):
             self.fragments.append(Fragment('header',header_duration, self.channels[h], self.id))
         for p in range(payloads):
-            self.fragments.append(Fragment('payload',payload_duration, self.channels[p+h+1], self.id))
+            self.fragments.append(Fragment('payload',payload_duration, self.channels[p+headers], self.id))
 
     def next(self):
         self.index_transmission+=1
@@ -137,16 +138,23 @@ class Base():
         self.transmitting[fragment.channel].remove(fragment)
         if len(fragment.collided) == 0 and fragment.link_success:
             fragment.success = 1
-        if fragment.collided:
-            self.fragments_collided += 1
         fragment.transmitted = 1
 
     def check_collision(self,fragment):
         for f in self.transmitting[fragment.channel]:
+            # Half-open airtime intervals: touching endpoints do not collide.
+            if f.timestamp + f.duration <= fragment.timestamp:
+                continue
+            for collided in (f, fragment):
+                if not collided.ever_collided:
+                    self.fragments_collided += 1
+                    collided.ever_collided = True
             f.collided.append(fragment)
             fragment.collided.append(f)
 
     def try_decode(self,packet,now):
+        if packet.success:
+            return False
         h_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='header') else 0 for f in packet.fragments)
         p_success = sum( ((len(f.collided)==0) and f.transmitted==1 and f.link_success) if (f.type=='payload') else 0 for f in packet.fragments)
         success = 1 if ((h_success>0) and (p_success >= self.threshold)) else 0

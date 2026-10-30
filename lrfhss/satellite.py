@@ -14,6 +14,8 @@ class SatelliteConfig:
     altitude_km: float = 600.0
     elevation_deg: float = 45.0
     frequency_hz: float = 868e6
+    # Equivalent receiver noise bandwidth, NOT the hopping-channel bandwidth.
+    # This and required_snr_db define an illustrative, uncalibrated sensitivity.
     bandwidth_hz: float = 125e3
     tx_power_dbm: float = 14.0
     tx_gain_dbi: float = 0.0
@@ -24,8 +26,19 @@ class SatelliteConfig:
     shadowing_std_db: float = 0.0
     min_elevation_deg: float = 10.0
     earth_radius_km: float = 6371.0
-    orbit_period_s: float = 5760.0
+    orbit_period_s: float | None = None
     include_doppler: bool = False
+
+    def __post_init__(self):
+        for name in ("altitude_km", "frequency_hz", "bandwidth_hz", "earth_radius_km"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if not -90 <= self.elevation_deg <= 90:
+            raise ValueError("elevation_deg must be between -90 and 90")
+        if not 0 <= self.min_elevation_deg <= 90:
+            raise ValueError("min_elevation_deg must be between 0 and 90")
+        if self.shadowing_std_db < 0:
+            raise ValueError("shadowing_std_db must be nonnegative")
 
 
 class SatelliteChannel:
@@ -35,19 +48,33 @@ class SatelliteChannel:
 
     def __init__(self, config=None, seed=0):
         self.config = config or SatelliteConfig()
+        self.seed = seed
         self.random = random.Random(seed)
 
+    @property
+    def orbit_period_s(self):
+        """Kepler period unless explicitly overridden; <=0 requests static geometry."""
+        if self.config.orbit_period_s is not None:
+            return self.config.orbit_period_s
+        radius_m = (self.config.earth_radius_km + self.config.altitude_km) * 1000
+        return 2 * math.pi * math.sqrt(radius_m ** 3 / 3.986004418e14)
+
+    def central_angle_rad(self, time_s):
+        # Start on the approaching side at elevation_deg, then pass overhead.
+        re = self.config.earth_radius_km
+        rs = re + self.config.altitude_km
+        elevation = math.radians(self.config.elevation_deg)
+        initial = math.acos(re / rs * math.cos(elevation)) - elevation
+        return -initial + 2 * math.pi * time_s / self.orbit_period_s
+
     def elevation_deg(self, time_s=0.0):
-        """Return a smooth pass elevation, centered on the configured elevation."""
-        if self.config.orbit_period_s <= 0:
+        """Circular overhead orbit over a fixed site on a nonrotating spherical Earth."""
+        if self.orbit_period_s <= 0:
             return self.config.elevation_deg
-        amplitude = max(0.0, 90.0 - self.config.min_elevation_deg)
-        center = (self.config.elevation_deg - self.config.min_elevation_deg) / max(amplitude, 1e-12)
-        center = min(1.0, max(0.0, center))
-        phase = math.asin(2.0 * center - 1.0)
-        return self.config.min_elevation_deg + amplitude * (
-            (math.sin(2.0 * math.pi * time_s / self.config.orbit_period_s + phase) + 1.0) / 2.0
-        )
+        angle = self.central_angle_rad(time_s)
+        rs = self.config.earth_radius_km + self.config.altitude_km
+        return math.degrees(math.atan2(rs * math.cos(angle) - self.config.earth_radius_km,
+                                      rs * abs(math.sin(angle))))
 
     def slant_range_km(self, elevation_deg=None, time_s=0.0):
         elevation = self.elevation_deg(time_s) if elevation_deg is None else elevation_deg
@@ -73,11 +100,14 @@ class SatelliteChannel:
         return self.received_power_dbm(time_s) - self.noise_power_dbm() - self.config.implementation_loss_db
 
     def doppler_hz(self, time_s=0.0):
-        if not self.config.include_doppler:
+        if not self.config.include_doppler or self.orbit_period_s <= 0:
             return 0.0
-        orbital_speed = math.sqrt(3.986004418e14 / ((self.config.earth_radius_km + self.config.altitude_km) * 1000.0))
-        radial_speed = orbital_speed * math.cos(math.radians(self.elevation_deg(time_s)))
-        return radial_speed / self.speed_of_light_m_s * self.config.frequency_hz
+        re = self.config.earth_radius_km
+        rs = re + self.config.altitude_km
+        radial_speed = (re * rs * math.sin(self.central_angle_rad(time_s))
+                        * (2 * math.pi / self.orbit_period_s)
+                        / self.slant_range_km(time_s=time_s) * 1000)
+        return -radial_speed / self.speed_of_light_m_s * self.config.frequency_hz
 
     def link_budget(self, time_s=0.0):
         elevation = self.elevation_deg(time_s)
@@ -101,9 +131,27 @@ class SatelliteChannel:
         budget = self.link_budget(time_s)
         return budget["visible"] and not budget["outage"]
 
-    def access_fraction(self, samples=720):
-        """Estimate the fraction of an orbit with a usable link."""
+    def access_fraction(self, samples=720, duration_s=None):
+        """Expected usable fraction over one orbit or a specified observation window.
+
+        Integrates Gaussian shadowing analytically without consuming the channel RNG.
+        This is temporal availability at one site, not geographic coverage.
+        """
         if samples < 1:
             raise ValueError("samples must be positive")
-        usable = sum(self.fragment_available(i * self.config.orbit_period_s / samples) for i in range(samples))
+        duration = max(self.orbit_period_s, 0) if duration_s is None else duration_s
+        if duration < 0:
+            raise ValueError("duration_s must be nonnegative")
+        usable = 0.0
+        for i in range(samples):
+            time = (i + 0.5) * duration / samples
+            if self.elevation_deg(time) < self.config.min_elevation_deg:
+                continue
+            margin = (self.config.tx_power_dbm + self.config.tx_gain_dbi
+                      + self.config.rx_gain_dbi - self.free_space_path_loss_db(time_s=time)
+                      - self.noise_power_dbm() - self.config.implementation_loss_db
+                      - self.config.required_snr_db)
+            sigma = self.config.shadowing_std_db
+            usable += (0.5 * (1 + math.erf(margin / (sigma * math.sqrt(2))))
+                       if sigma else float(margin >= 0))
         return usable / samples
